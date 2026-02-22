@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{\"components\\\\PaymentModal.js -> qrcode\":{\"id\":\"components\\\\PaymentModal.js -> qrcode\",\"files\":[\"static/chunks/node_modules_qrcode_lib_browser_js.js\"]}}"
+self.__REACT_LOADABLE_MANIFEST="{}";

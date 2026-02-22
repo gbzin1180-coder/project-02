@@ -1,21 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/router'
+import QRCode from 'qrcode'
 
 export default function PaymentModal({ open, onClose }) {
   const router = useRouter()
   const [pix, setPix] = useState(null)
   const [qrImg, setQrImg] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const [copySuccess, setCopySuccess] = useState(false)
   const [paymentId, setPaymentId] = useState(null)
   const textRef = useRef(null)
   const pollingRef = useRef(null)
 
-  // Fetch pagamento
+  // Fetch pagamento - otimizado com timeout
   useEffect(() => {
     if (!open) return
     
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10s timeout
+
     setLoading(true)
+    setError(null)
     setPix(null)
     setQrImg(null)
     setPaymentId(null)
@@ -23,61 +29,94 @@ export default function PaymentModal({ open, onClose }) {
     fetch('/api/create-payment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: 1490 })
+      body: JSON.stringify({ amount: 1490 }),
+      signal: controller.signal
     })
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`API error: ${r.status}`)
+        return r.json()
+      })
       .then(data => {
         const pixData = data?.pix || data?.data?.pix || data
+        if (!pixData?.qrcode) {
+          throw new Error('QR Code não recebido')
+        }
         setPix(pixData)
         setPaymentId(pixData?.id || data?.id || null)
         
-        // Generate QR
-        if (pixData?.qrcode) {
-          import('qrcode').then(QR => {
-            QR.toDataURL(pixData.qrcode, { margin: 1, scale: 6 }).then(url => {
-              setQrImg(url)
-            })
-          })
+        // Gerar QR Code - agora síncrono e rápido
+        QRCode.toDataURL(pixData.qrcode, { 
+          margin: 1, 
+          scale: 6,
+          width: 260 
+        }).then(url => {
+          setQrImg(url)
+        }).catch(err => {
+          console.error('QR generation error:', err)
+          setError('Erro ao gerar QR Code')
+        })
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') {
+          console.error('API error:', err)
+          setError(err.message || 'Erro ao criar pagamento. Tente novamente.')
         }
       })
-      .catch(err => console.error(err))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        clearTimeout(timeoutId)
+        setLoading(false)
+      })
+
+    return () => {
+      controller.abort()
+      clearTimeout(timeoutId)
+    }
   }, [open])
 
-  // Polling para verificar status de pagamento
+  // Polling otimizado - mais rápido inicialmente
   useEffect(() => {
     if (!paymentId || !open) return
 
-    // Limpa polling anterior se existir
     if (pollingRef.current) clearInterval(pollingRef.current)
 
-    // Inicia polling a cada 3 segundos
-    pollingRef.current = setInterval(async () => {
+    let pollCount = 0
+    const controller = new AbortController()
+    
+    const poll = async () => {
       try {
         const res = await fetch('/api/check-payment-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ paymentId })
+          body: JSON.stringify({ paymentId }),
+          signal: controller.signal
         })
         const data = await res.json()
 
-        // Se pagamento foi pago, redireciona
-        if (data.status === 'paid' || data.paidAmount > 0) {
+        if (data.status === 'paid' || (data.paidAmount && data.paidAmount > 0)) {
           clearInterval(pollingRef.current)
           onClose()
           router.push('/obrigado')
         }
       } catch (err) {
-        console.error('Polling error:', err)
+        if (err.name !== 'AbortError') {
+          console.error('Poll error:', err)
+        }
       }
-    }, 3000)
+    }
+
+    // Primeira verificação em 1s
+    const initialTimeout = setTimeout(poll, 1000)
+    
+    // Depois a cada 3s
+    pollingRef.current = setInterval(poll, 3000)
 
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current)
+      clearTimeout(initialTimeout)
+      clearInterval(pollingRef.current)
+      controller.abort()
     }
   }, [paymentId, open, onClose, router])
 
-  // Clean up on component unmount
   useEffect(() => {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current)
@@ -147,14 +186,13 @@ export default function PaymentModal({ open, onClose }) {
           ×
         </button>
 
-        {/* Foto no topo */}
         <img 
           src="https://i.imgur.com/GhHgSnk.jpeg" 
           alt="Livro"
+          loading="eager"
           style={{ width: '100%', display: 'block', objectFit: 'cover', borderRadius: '12px 12px 0 0' }}
         />
 
-        {/* Conteúdo centralizado */}
         <div style={{ padding: '28px 24px', textAlign: 'center' }}>
           <h3 style={{ 
             margin: '0 0 8px 0', 
@@ -185,12 +223,34 @@ export default function PaymentModal({ open, onClose }) {
           </p>
 
           {loading && (
-            <p style={{ color: 'var(--muted)', fontSize: '14px' }}>Preparando pagamento...</p>
+            <div style={{ textAlign: 'center', padding: '20px' }}>
+              <div style={{
+                display: 'inline-block',
+                width: '40px',
+                height: '40px',
+                border: '3px solid #f3f3f3',
+                borderTop: '3px solid var(--cta)',
+                borderRadius: '50%',
+                animation: 'spin 1s linear infinite'
+              }} />
+              <p style={{ color: 'var(--muted)', fontSize: '14px', marginTop: '12px' }}>Preparando pagamento...</p>
+              <style>{`
+                @keyframes spin {
+                  0% { transform: rotate(0deg); }
+                  100% { transform: rotate(360deg); }
+                }
+              `}</style>
+            </div>
+          )}
+
+          {error && (
+            <p style={{ color: '#d32f2f', fontSize: '14px', margin: '12px 0' }}>
+              ❌ {error}
+            </p>
           )}
 
           {!loading && pix && (
             <div>
-              {/* QR Code centralizado */}
               {qrImg && (
                 <div style={{ margin: '12px 0 28px 0', display: 'flex', justifyContent: 'center' }}>
                   <img
@@ -209,7 +269,6 @@ export default function PaymentModal({ open, onClose }) {
                 </div>
               )}
 
-              {/* Seção PIX copia e cola */}
               <div style={{ 
                 background: '#f5f5f5',
                 padding: '16px',
@@ -244,7 +303,6 @@ export default function PaymentModal({ open, onClose }) {
                   }}
                 />
 
-                {/* Botão copiar */}
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                   <button
                     onClick={() => {
@@ -267,11 +325,8 @@ export default function PaymentModal({ open, onClose }) {
                       borderRadius: '6px',
                       cursor: 'pointer',
                       fontWeight: 'bold',
-                      fontSize: '15px',
-                      transition: 'opacity 0.2s'
+                      fontSize: '15px'
                     }}
-                    onMouseEnter={(e) => e.target.style.opacity = '0.9'}
-                    onMouseLeave={(e) => e.target.style.opacity = '1'}
                   >
                     {copySuccess ? '✓ Copiado!' : 'Copiar PIX'}
                   </button>
