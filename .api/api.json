@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "apis": [
+    {
+      "identifier": "ghostspay",
+      "source": "@ghostspay/v1.0#4pf26sqmfye6vl7",
+      "integrity": "sha512-zUXbN6r8YbnWCRLfOy/JqMkxnAOiVaxYgTaGVdQuKjoqHHoWd62mg62NkXqPN226lat/bGNWHQIkb9l1NiTLGA==",
+      "installerVersion": "6.1.3"
+    }
+  ]
+}
